@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: com.bcopstein.endpointsdemo1.Endpointsdemo1ApplicationTests
--------------------------------------------------------------------------------
-Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.792 s - in com.bcopstein.endpointsdemo1.Endpointsdemo1ApplicationTests
