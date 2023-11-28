@@ -40,25 +40,65 @@ uint8_t lifeGlyph[] = {
     0b101,
     0b111,
     0b010};
-uint8_t ShieldGlyph[] = {
-    0b001,
-    0b001,
-    0b001
-};
+
 
 typedef struct {
     int x;
     int y;
 } Object;
+
+uint8_t ShieldGlyphR[] = {
+    0b0000001,
+    0b0000001,
+    0b0000001,
+    0b0000001,
+    0b0000001,
+    0b0000001,
+    0b0000001
+};
+uint8_t ShieldGlyphU[] = {
+    0b1111111,
+    0b0000000,
+    0b0000000,
+    0b0000000,
+    0b0000000,
+    0b0000000,
+    0b0000000
+};
+uint8_t ShieldGlyphD[] = {
+    0b0000000,
+    0b0000000,
+    0b0000000,
+    0b0000000,
+    0b0000000,
+    0b0000000,
+    0b1111111
+};
+uint8_t ShieldGlyphL[] = {
+    0b1000000,
+    0b1000000,
+    0b1000000,
+    0b1000000,
+    0b1000000,
+    0b1000000,
+    0b1000000
+};
+
+// Atualização da estrutura Shield
 typedef struct {
     int x;
     int y;
-    char direction;  // 'U' para cima, 'D' para baixo, 'L' para esquerda, 'R' para direita
+    uint8_t *currentGlyph;
+    uint8_t *glyphR;
+    uint8_t *glyphU;
+    uint8_t *glyphD;
+    uint8_t *glyphL;
 } Shield;
 
-Shield playerShield;
+int shieldPosition = 0; // 0: direita, 1: cima, 2: esquerda, 3: baixo
 
-
+#define SHIELD_WIDTH 7
+#define SHIELD_HEIGHT 7
 void displayCenteredGlyph() {
     // Calcula as coordenadas do centro da tela
     int centerX = (LCDWIDTH - CENTRAL_OBJECT_WIDTH) / 2;
@@ -122,26 +162,17 @@ void clearAnotherGlyph(int x, int y) {
         }
     }
 }
-int isCollisionWithShield(Object *obj) {
-    int shieldXStart = playerShield.x - 2;
-    int shieldXEnd = playerShield.x + CENTRAL_OBJECT_WIDTH + 2;
-    int shieldYStart = playerShield.y - 2;
-    int shieldYEnd = playerShield.y + CENTRAL_OBJECT_HEIGHT + 2;
-
-    return (obj->x + OBJECT_WIDTH > shieldXStart && obj->x < shieldXEnd &&
-            obj->y + OBJECT_HEIGHT > shieldYStart && obj->y < shieldYEnd);
-}
 
 void moveObject(Object *obj, int targetX, int targetY, int *lives) {
     // Limpa a exibição anterior do objeto
     clearAnotherGlyph(obj->x, obj->y);
 
-    // Verifica se o objeto atingiu o escudo
-    if (isCollisionWithShield(obj)) {
-        // Remove o objeto
-        obj->x = -1;  // Posição fora da tela
-        obj->y = -1;
-    } else {
+    // Move o objeto em direção ao alvo
+    if (obj->x < targetX) {
+        obj->x += MOVE_SPEED;
+    } else if (obj->x > targetX) {
+        obj->x -= MOVE_SPEED;
+    }
 
     if (obj->y < targetY) {
         obj->y += MOVE_SPEED;
@@ -159,7 +190,6 @@ void moveObject(Object *obj, int targetX, int targetY, int *lives) {
         obj->y = rand() % (LCDHEIGHT - OBJECT_HEIGHT);
         // Limpa o caractere de vida correspondente
         clearLifeGlyph(*lives);
-    }
     }
     _delay_ms(30);
 }
@@ -195,108 +225,137 @@ void generateRandomObject(Object *objects, int *objectsInCenter) {
         (*objectsInCenter)++;
     }
 }
+
 char readButton() {
-    char key = 0; // Declare key antes de usá-la
-
-
     // Verifique se o botão Up foi pressionado
     if (!(PIND & (1 << PD5))) {
         _delay_ms(50); // Debounce
         if (!(PIND & (1 << PD5))) {
-            key = 'w'; // Tecla Up
+            return 'W'; // Tecla Up
         }
-    } else if (!(PIND & (1 << PB0))) {
+    }
+    // Verifique se o botão Down foi pressionado
+    if (!(PINB & (1 << BTN_DOWN))) {
         _delay_ms(50); // Debounce
-        if (!(PIND & (1 << PB0))) {
-            key = 's'; // Tecla down
+        if (!(PINB & (1 << BTN_DOWN))) {
+            return 'S'; // Tecla Down
         }
-    } else if (!(PIND & (1 << PB6))) {
+    }
+    // Verifique se o botão Left foi pressionado
+    if (!(PIND & (1 << BTN_LEFT))) {
         _delay_ms(50); // Debounce
-        if (!(PIND & (1 << PB6))) {
-            key = 'a'; // Tecla Left
+        if (!(PIND & (1 << BTN_LEFT))) {
+            return 'A'; // Tecla Left
         }
-    } else if (!(PIND & (1 << PD7))) {
+    }
+    // Verifique se o botão Right foi pressionado
+    if (!(PIND & (1 << BTN_RIGHT))) {
         _delay_ms(50); // Debounce
-        if (!(PIND & (1 << PD7))) {
-            key = 'd'; // Tecla Right
+        if (!(PIND & (1 << BTN_RIGHT))) {
+            return 'D'; // Tecla Right
         }
     }
 
-    return key; // Certifique-se de retornar key mesmo se nenhum botão for pressionado
+    // Faça o mesmo para os outros botões (Reset)
+
+    return 0; // Nenhuma tecla pressionada
 }
-void displayShieldGlyph() {
-    for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) {
-            nokia_lcd_set_pixel(playerShield.x + j, playerShield.y + i, (ShieldGlyph[i] >> (2 - j)) & 1);
+
+void displayShield(Shield *shield) {
+    for (int i = 0; i < SHIELD_HEIGHT; i++) {
+        for (int j = 0; j < SHIELD_WIDTH; j++) {
+            int pixelValue = (shield->currentGlyph[i] >> (SHIELD_WIDTH - 1 - j)) & 1;
+            nokia_lcd_set_pixel(shield->x + j, shield->y + i, 1);
         }
     }
 }
-void updateShieldPosition(char key) {
-    // Atualiza a posição do escudo com base na tecla pressionada
-    switch (key) {
-        case 'w':
-            playerShield.y--;
-            playerShield.direction = 'U';
-            break;
-        case 's':
-            playerShield.y++;
-            playerShield.direction = 'D';
-            break;
-        case 'a':
-            playerShield.x--;
-            playerShield.direction = 'L';
-            break;
-        case 'd':
-            playerShield.x++;
-            playerShield.direction = 'R';
-            break;
-        // Adicione mais casos conforme necessário
+
+void clearShield(Shield *shield) {
+    for (int i = 0; i < SHIELD_HEIGHT; i++) {
+        for (int j = 0; j < SHIELD_WIDTH; j++) {
+            nokia_lcd_set_pixel(shield->x + j, shield->y + i, 0);
+        }
     }
 }
-
 
 int main(void) {
     nokia_lcd_init();
     nokia_lcd_clear();
     DDRD &= ~(1 << BTN_UP | 1 << BTN_DOWN | 1 << BTN_LEFT | 1 << BTN_RIGHT);
 
-    srand(time(NULL));
+    srand(time(NULL)); // Inicializa a semente para números aleatórios
 
     Object movingObject;
-    Object objects[4];
+    Object objects[4];  // Array para rastrear objetos
     int targetX, targetY;
     int objectsInCenter = 0;
-    int lives = 3;
+    int lives = 3;  // Inicializa o contador de vidas
+Shield playerShield = {40, 28, ShieldGlyphR, ShieldGlyphU, ShieldGlyphD, ShieldGlyphL};
 
-    // Configuração inicial para o GlyphShield
-  playerShield.x = (LCDWIDTH - 3) / 2;  // 3 é a largura do ShieldGlyph
-playerShield.y = (LCDHEIGHT - 3) / 2; // 3 é a altura do ShieldGlyph
-
-    // Exibe o GlyphShield fora do loop principal
-    displayShieldGlyph();
-    nokia_lcd_render();
-
-    while (1) {
+       while (1) {
+        // Leia os botões
         char key = readButton();
 
-        if (key) {
-            updateShieldPosition(key);
+              //  clearShield(&playerShield);
 
-            switch (key) {
-                case 'w':
-                    break;
-                case 's':
-                    break;
-                case 'a':
-                    break;
-                case 'd':
-                    break;
-                default:
-                    break;
-            }
-        }
 
-        // Gere um objeto a cada 5 segundos em uma direção aleatória
+       if (key) {
+    // Ações com base na tecla pressionada
+    switch (key) {
+        case 'W':
+            shieldPosition = 1; // Cima
+            break;
+        case 'S':
+            shieldPosition = 3; // Baixo
+            break;
+        case 'A':
+            shieldPosition = 2; // Esquerda
+            break;
+        case 'D':
+            shieldPosition = 0; // Direita
+            break;
+        // Adicione mais casos conforme necessário
+
+        default:
+            // Ação padrão (se necessário)
+            break;
+    }
+}
+
+// Atualize as coordenadas do escudo com base na posição
+switch (shieldPosition) {
+    case 0: // Direita
+        playerShield.x = movingObject.x + OBJECT_WIDTH;
+        playerShield.y = movingObject.y + (OBJECT_HEIGHT - SHIELD_HEIGHT) / 2;
+        playerShield.currentGlyph = ShieldGlyphR;
+        break;
+    case 1: // Cima
+        playerShield.x = movingObject.x - (SHIELD_WIDTH - OBJECT_WIDTH) / 2;
+        playerShield.y = movingObject.y - SHIELD_HEIGHT;
+        playerShield.currentGlyph = ShieldGlyphU;
+        break;
+    case 2: // Esquerda
+        playerShield.x = movingObject.x - SHIELD_WIDTH;
+        playerShield.y = movingObject.y + (OBJECT_HEIGHT - SHIELD_HEIGHT) / 2;
+        playerShield.currentGlyph = ShieldGlyphL;
+        break;
+    case 3: // Baixo
+        playerShield.x = movingObject.x - (SHIELD_WIDTH - OBJECT_WIDTH) / 2;
+        playerShield.y = movingObject.y + OBJECT_HEIGHT;
+        playerShield.currentGlyph = ShieldGlyphD;
+        break;
+}
+
+// Exiba o escudo
+for (int i = 0; i < SHIELD_HEIGHT; i++) {
+    for (int j = 0; j < SHIELD_WIDTH; j++) {
+        nokia_lcd_set_pixel(playerShield.x + j, playerShield.y + i, (playerShield.currentGlyph[i] >> (SHIELD_WIDTH - 1 - j)) & 1);
+    }
+}
+// Certifique-se de que o escudo permaneça dentro dos limites da tela
+
+
+        // Gera um objeto a cada 5 segundos em uma direção aleatória
         if (rand() % 100 < 20) { // Ajuste o valor para controlar a frequência de geração
             generateRandomObject(objects, &objectsInCenter);
             targetX = (LCDWIDTH - OBJECT_WIDTH) / 2;
@@ -313,14 +372,12 @@ playerShield.y = (LCDHEIGHT - 3) / 2; // 3 é a altura do ShieldGlyph
         // Exiba o outro Glyph em uma posição fixa (por exemplo, canto superior direito)
         displayAnotherGlyph(0, 0);
 
+
         // Exiba o Glyph centralizado
         displayCenteredGlyph();
 
         // Exiba o contador de vidas
         displayLifeGlyphs(lives);
-
-        // Atualiza a posição do GlyphShield
-        displayShieldGlyph();
 
         // Atualize o display
         nokia_lcd_render();
@@ -331,6 +388,6 @@ playerShield.y = (LCDHEIGHT - 3) / 2; // 3 é a altura do ShieldGlyph
         }
 
         // Aguarde um curto período para dar a sensação de movimento suave
-        _delay_ms(20);
+        _delay_ms(100);
     }
 }
