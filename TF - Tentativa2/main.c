@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include "nokia5110.h"
+#include <avr/interrupt.h>
 
 #define LCDWIDTH 84
 #define LCDHEIGHT 48
@@ -17,9 +18,18 @@
 #define GAME_OVER_SCREEN 2
 #define START_SCREEN 0
 // Defina a velocidade de movimento do objeto
-#define MOVE_SPEED 1
+// Defina a velocidade de movimento do objeto inicial
+#define INITIAL_MOVE_SPEED 1.0
+// Defina o intervalo de aumento do temporizador (em milissegundos)
+#define TIMER_INTERVAL 10000
+// Defina a quantidade de aumento da velocidade a cada intervalo de temporizador
+#define SPEED_INCREASE_AMOUNT 0.1
+
+volatile uint32_t elapsedTime = 0;
 
 int targetX, targetY; // Declare targetX and targetY here
+int defendedObjects = 0; // Inicializa o contador de objetos defendidos
+float moveSpeed = INITIAL_MOVE_SPEED;
 
 uint8_t glyph[] = {
     0b00011000,
@@ -43,8 +53,10 @@ typedef struct
 {
     int x;
     int y;
-    int shouldRemove; // Novo indicador para remover o objeto
+    int shouldRemove;
+    int defended; // Novo indicador se o objeto foi defendido
 } Object;
+
 
 uint8_t ShieldGlyphR[] = {
     0b0000001,
@@ -182,7 +194,7 @@ void moveObject(Object *obj, int targetX, int targetY, int *lives, Shield *playe
     // Limpa a exibição anterior do objeto
     clearAnotherGlyph(obj->x, obj->y);
 
-    // Move o objeto em direção ao alvo
+ // Mova o objeto em direção ao alvo com base na velocidade atualizada
     if (obj->x < targetX)
     {
         obj->x += MOVE_SPEED;
@@ -200,6 +212,8 @@ void moveObject(Object *obj, int targetX, int targetY, int *lives, Shield *playe
     {
         obj->y -= MOVE_SPEED;
     }
+
+
  if (isWithinShieldRange(obj->x, obj->y, playerShield) &&
         obj->x >= targetX && obj->x < targetX + OBJECT_WIDTH &&
         obj->y >= targetY && obj->y < targetY + OBJECT_HEIGHT)
@@ -219,10 +233,36 @@ void moveObject(Object *obj, int targetX, int targetY, int *lives, Shield *playe
         // Limpa o caractere de vida correspondente
         clearLifeGlyph(*lives);
     }
-    _delay_ms(30);
+    if (isWithinShieldRange(obj->x, obj->y, playerShield) &&
+        obj->x >= targetX && obj->x < targetX + OBJECT_WIDTH &&
+        obj->y >= targetY && obj->y < targetY + OBJECT_HEIGHT)
+    {
+        // Marca o objeto para remoção
+        obj->shouldRemove = 1;
+
+        // Se o objeto ainda não foi defendido, incrementa o contador
+        if (!obj->defended)
+        {
+            obj->defended = 1;
+            defendedObjects++;
+        }
+    } if (elapsedTime >= TIMER_INTERVAL)
+    {
+        elapsedTime = 0; // Reinicia o temporizador
+
+        // Aumenta a velocidade dos objetos
+        moveSpeed += SPEED_INCREASE_AMOUNT;
+    }
+
+   // _delay_ms(30);
 }
 
-
+void displayDefendedObjectsCounter()
+{
+    nokia_lcd_set_cursor(10, 40);
+    nokia_lcd_write_string("Defendidos: ", 1);
+    nokia_lcd_write_char(defendedObjects + '0', 1);
+}
 
 void generateRandomObject(Object *objects, int *objectsInCenter)
 {
@@ -293,6 +333,11 @@ char readButton()
             return 'D';
             nokia_lcd_write_string("Direita leitura ", 1);
       // Tecla Right
+    }
+     // Verifique se o botão de reset foi pressionado
+    if (PIND & (1 << PD3)) { // Assumindo que o botão de reset está conectado a PC0
+        _delay_ms(50); // Debounce
+        return 'R'; // Tecla Reset
     }
     return 0; // Nenhuma tecla pressionada
 }
@@ -401,19 +446,18 @@ void displayStartScreen()
     nokia_lcd_render();
     _delay_ms(30);
 }
-
 void displayGameOverScreen()
 {
     nokia_lcd_clear();
     nokia_lcd_set_cursor(15, 20);
     nokia_lcd_write_string("GAME ", 1);
     nokia_lcd_write_string("OVER", 1);
+    displayDefendedObjectsCounter(); // Adicione esta linha
     nokia_lcd_set_cursor(34, 30);
     nokia_lcd_write_string("BRO", 1);
     nokia_lcd_render();
     _delay_ms(2000);
 }
-
 void displayGameScreen(Shield *playerShield, Object *objects, int *objectsInCenter, int *lives)
 {
     nokia_lcd_clear();
@@ -469,7 +513,33 @@ void displayGameScreen(Shield *playerShield, Object *objects, int *objectsInCent
     // Aguarde um curto período para dar a sensação de movimento suave
     _delay_ms(300);
 }
+void resetGame(Shield *playerShield, Object *objects, int *objectsInCenter, int *lives)
+{
+    // Reinicialize o estado do jogo
+    *objectsInCenter = 0;
+    *lives = 3;
+    playerShield->x = 40;
+    playerShield->y = 28;
+    shieldPosition = 0; // ou a posição inicial desejada
+        defendedObjects = 0;
 
+
+    // Reinicie a posição dos objetos
+    for (int i = 0; i < 4; i++)
+    {
+        objects[i].x = rand() % (LCDWIDTH - OBJECT_WIDTH);
+        objects[i].y = rand() % (LCDHEIGHT - OBJECT_HEIGHT);
+        objects[i].shouldRemove = 0;
+    }
+}
+void initTimer()
+{
+    // Configura o Timer1 para gerar interrupções a cada TIMER_INTERVAL milissegundos
+    TCCR1B |= (1 << WGM12) | (1 << CS11) | (1 << CS10); // CTC mode, prescaler 64
+OCR1A = F_CPU / (64 * 1000) * TIMER_INTERVAL - 1;
+    TIMSK1 |= (1 << OCIE1A);                             // Ativa a interrupção por comparação
+    sei();                                               // Ativa as interrupções globais
+}
 int main(void)
 {
     nokia_lcd_init();
@@ -477,6 +547,7 @@ int main(void)
     DDRD &= ~(1 << PD5 | 1 << PD4 | 1 << PD6 | 1 << PD7);
 
     srand(time(NULL)); // Inicializa a semente para números aleatórios
+    initTimer(); // Inicializa o temporizador
 
     Object movingObject;
     Object objects[4]; // Array para rastrear objetos
@@ -521,27 +592,34 @@ int main(void)
                 gameState = GAME_SCREEN;
                 _delay_ms(30);
                 break;
+            case 'R':
+                resetGame(&playerShield, objects, &objectsInCenter, &lives);
+                gameState = START_SCREEN;
+                _delay_ms(30);
+                break;
             default:
+                resetGame(&playerShield, objects, &objectsInCenter, &lives);
                 gameState = START_SCREEN;
                 _delay_ms(30);
                 break;
             }
         }
 
-        if (gameState == GAME_SCREEN)
+      if (gameState == GAME_SCREEN)
         {
             displayGameScreen(&playerShield, objects, &objectsInCenter, &lives);
 
-            if (lives == 0)
+            if (lives <= 0)
             {
                 gameState = GAME_OVER_SCREEN;
             }
         }
-
         if (gameState == GAME_OVER_SCREEN)
         {
             displayGameOverScreen();
-            return 1;
+            resetGame(&playerShield, objects, &objectsInCenter, &lives);
+            gameState = START_SCREEN; // Reinicie o jogo
+            _delay_ms(30);
         }
     }
 }
